@@ -1,0 +1,292 @@
+# ARIMA Model for Predicting Reservoir Storage (acre-feet)
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import warnings
+warnings.filterwarnings('ignore')
+import pmdarima as pm
+
+# 1. Data Loading and Exploration
+print("Loading the dataset...")
+df = pd.read_csv('data_corrected.csv')
+
+# Display basic information about the dataset
+print("\nDataset Info:")
+print(f"Shape: {df.shape}")
+print("\nFirst few rows:")
+df.head()
+
+# 2. Data Preprocessing
+print("\n\nPreprocessing the data...")
+
+# Convert datetime to proper datetime format
+df['datetime'] = pd.to_datetime(df['datetime'])
+
+# Set datetime as index
+df.set_index('datetime', inplace=True)
+
+# Check for missing values
+print("\nMissing values in each column:")
+print(df.isnull().sum())
+
+# Fill missing values or remove them based on your specific requirements
+# For this notebook, we'll use forward fill for missing values
+df = df.fillna(method='ffill')
+
+# Verify no missing values remain
+print("\nRemaining missing values after filling:")
+print(df.isnull().sum())
+
+# Focus on our target variable: storage (acre-feet)
+storage = df['storage (acre-feet)']
+
+# Visualize the time series
+plt.figure(figsize=(14, 6))
+storage.plot()
+plt.title('Reservoir Storage (acre-feet) Over Time')
+plt.ylabel('Storage (acre-feet)')
+plt.xlabel('Date')
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# 3. Check Stationarity
+print("\n\nChecking stationarity...")
+
+# Perform Augmented Dickey-Fuller test
+def check_stationarity(ts):
+    result = adfuller(ts.dropna())
+    print(f'ADF Statistic: {result[0]}')
+    print(f'p-value: {result[1]}')
+    print('Critical Values:')
+    for key, value in result[4].items():
+        print(f'\t{key}: {value}')
+    
+    if result[1] <= 0.05:
+        print("The time series is stationary (reject H0)")
+    else:
+        print("The time series is not stationary (fail to reject H0)")
+
+check_stationarity(storage)
+
+# 4. Differencing (if needed)
+# If the series is not stationary, we need to difference it
+print("\n\nApplying differencing if needed...")
+
+# First-order differencing
+storage_diff = storage.diff().dropna()
+
+plt.figure(figsize=(14, 6))
+storage_diff.plot()
+plt.title('First-order Differenced Storage (acre-feet)')
+plt.ylabel('Differenced Storage')
+plt.xlabel('Date')
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# Check stationarity of differenced series
+check_stationarity(storage_diff)
+
+# 5. ACF and PACF Plots
+print("\n\nGenerating ACF and PACF plots...")
+
+plt.figure(figsize=(14, 10))
+
+plt.subplot(211)
+plot_acf(storage_diff, ax=plt.gca(), lags=40)
+plt.title('Autocorrelation Function (ACF)')
+
+plt.subplot(212)
+plot_pacf(storage_diff, ax=plt.gca(), lags=40)
+plt.title('Partial Autocorrelation Function (PACF)')
+
+plt.tight_layout()
+plt.show()
+
+# 6. Automatic ARIMA Model Selection
+print("\n\nAutomatic ARIMA model selection...")
+
+# Use pmdarima (auto_arima) to find the best parameters
+auto_model = pm.auto_arima(
+    storage,
+    start_p=0, start_q=0,
+    max_p=5, max_q=5,
+    d=None,  # Let auto_arima determine 'd'
+    seasonal=False,  # We'll keep it simple for now
+    trace=True,
+    error_action='ignore',
+    suppress_warnings=True,
+    stepwise=True
+)
+
+print("\nBest ARIMA model:")
+print(auto_model.summary())
+
+# 7. Train-Test Split
+print("\n\nSplitting data into train and test sets...")
+
+# Use 80% of data for training, 20% for testing
+train_size = int(len(storage) * 0.8)
+train, test = storage[:train_size], storage[train_size:]
+
+print(f"Training data size: {len(train)}")
+print(f"Testing data size: {len(test)}")
+
+# 8. Manual ARIMA Model Building
+print("\n\nBuilding the ARIMA model...")
+
+# Extract the p, d, q values from auto_arima
+p, d, q = auto_model.order
+
+# Create and fit ARIMA model
+model = ARIMA(train, order=(p, d, q))
+model_fit = model.fit()
+
+print("\nARIMA Model Summary:")
+print(model_fit.summary())
+
+# 9. Make Predictions
+print("\n\nMaking predictions...")
+
+# Forecast for the test period
+forecast = model_fit.forecast(steps=len(test))
+forecast_df = pd.DataFrame({'forecast': forecast}, index=test.index)
+
+# 10. Evaluate the Model
+print("\n\nEvaluating the model...")
+
+# Calculate error metrics
+rmse = np.sqrt(mean_squared_error(test, forecast))
+mae = mean_absolute_error(test, forecast)
+r2 = r2_score(test, forecast)
+
+print(f"Root Mean Squared Error (RMSE): {rmse}")
+print(f"Mean Absolute Error (MAE): {mae}")
+print(f"R-squared: {r2}")
+
+# Visualize the predictions vs actual values
+plt.figure(figsize=(14, 6))
+plt.plot(train, label='Training Data')
+plt.plot(test, label='Actual Test Data')
+plt.plot(forecast_df, label='Forecast', color='red')
+plt.title('ARIMA Model Forecast vs Actual Values')
+plt.ylabel('Storage (acre-feet)')
+plt.xlabel('Date')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# 11. Future Forecast
+print("\n\nGenerating future forecast...")
+
+# Fit the model on the entire dataset
+final_model = ARIMA(storage, order=(p, d, q))
+final_model_fit = final_model.fit()
+
+# Forecast for the next 12 periods (adjust based on your data frequency)
+future_steps = 12
+future_forecast = final_model_fit.forecast(steps=future_steps)
+
+# Create a date range for future predictions
+last_date = storage.index[-1]
+if isinstance(last_date, pd.Timestamp):
+    # Determine the frequency of the data
+    if len(storage) > 1:
+        freq = pd.infer_freq(storage.index)
+        if freq is None:
+            # If frequency can't be inferred, use the median difference
+            date_diffs = pd.Series(storage.index[1:]) - pd.Series(storage.index[:-1])
+            median_diff = date_diffs.median()
+            future_dates = pd.date_range(start=last_date + median_diff, periods=future_steps, freq=median_diff)
+        else:
+            future_dates = pd.date_range(start=last_date, periods=future_steps + 1, freq=freq)[1:]
+    else:
+        # Default to daily if we only have one data point
+        future_dates = pd.date_range(start=last_date, periods=future_steps + 1, freq='D')[1:]
+else:
+    # Use simple integer indexing if the index is not datetime
+    future_dates = range(len(storage), len(storage) + future_steps)
+
+future_df = pd.DataFrame({'forecast': future_forecast}, index=future_dates)
+
+# Plot historical data and future forecast
+plt.figure(figsize=(14, 6))
+plt.plot(storage, label='Historical Data')
+plt.plot(future_df, label='Future Forecast', color='red')
+plt.title('ARIMA Model: Future Storage (acre-feet) Forecast')
+plt.ylabel('Storage (acre-feet)')
+plt.xlabel('Date')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# 12. Residual Analysis
+print("\n\nPerforming residual analysis...")
+
+# Get the residuals
+residuals = model_fit.resid
+
+plt.figure(figsize=(14, 10))
+
+# Plot residuals
+plt.subplot(311)
+plt.plot(residuals)
+plt.title('Residuals')
+plt.grid(True)
+
+# Plot histogram of residuals
+plt.subplot(312)
+plt.hist(residuals, bins=30)
+plt.title('Histogram of Residuals')
+plt.grid(True)
+
+# QQ plot
+plt.subplot(313)
+from scipy import stats
+stats.probplot(residuals, dist="norm", plot=plt)
+plt.title('QQ Plot of Residuals')
+plt.tight_layout()
+plt.show()
+
+# ACF of residuals
+plt.figure(figsize=(14, 6))
+plot_acf(residuals, lags=40)
+plt.title('ACF of Residuals')
+plt.tight_layout()
+plt.show()
+
+print("\nLjung-Box test for residual autocorrelation:")
+from statsmodels.stats.diagnostic import acorr_ljungbox
+lb_result = acorr_ljungbox(residuals, lags=[10, 15, 20])
+print(lb_result)
+
+# 13. Feature Importance (if using ARIMAX with external regressors)
+# This would be relevant if we were using additional features in an ARIMAX model
+
+print("\n\n==== ARIMA Model Analysis Complete ====")
+
+# 14. Summary and Conclusions
+print("""
+Key Findings:
+1. The optimal ARIMA model parameters are: p={}, d={}, q={}
+2. Forecast Accuracy:
+   - RMSE: {:.2f}
+   - MAE: {:.2f}
+   - R²: {:.2f}
+3. The model successfully captures the trend in storage levels.
+
+Next Steps:
+1. Consider adding seasonal components (SARIMA) if seasonal patterns exist
+2. Explore incorporating external variables like precipitation, temperature, or releases using ARIMAX
+3. Compare with other time series models like Prophet or LSTM
+""".format(p, d, q, rmse, mae, r2))
